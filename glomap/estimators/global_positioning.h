@@ -29,6 +29,10 @@ struct GlobalPositionerOptions : public OptimizationBaseOptions {
   bool optimize_points = true;
   bool optimize_scales = true;
 
+  bool use_gpu = true;
+  std::string gpu_index = "-1";
+  int min_num_images_gpu_solver = 50;
+
   // Constrain the minimum number of views per track
   int min_num_view_per_track = 3;
 
@@ -42,7 +46,10 @@ struct GlobalPositionerOptions : public OptimizationBaseOptions {
 
   GlobalPositionerOptions() : OptimizationBaseOptions() {
     thres_loss_function = 1e-1;
-    loss_function = std::make_shared<ceres::HuberLoss>(thres_loss_function);
+  }
+
+  std::shared_ptr<ceres::LossFunction> CreateLossFunction() {
+    return std::make_shared<ceres::HuberLoss>(thres_loss_function);
   }
 };
 
@@ -54,18 +61,22 @@ class GlobalPositioner {
   // failure.
   // Assume tracks here are already filtered
   bool Solve(const ViewGraph& view_graph,
+             std::unordered_map<rig_t, Rig>& rigs,
              std::unordered_map<camera_t, Camera>& cameras,
+             std::unordered_map<frame_t, Frame>& frames,
              std::unordered_map<image_t, Image>& images,
              std::unordered_map<track_t, Track>& tracks);
 
   GlobalPositionerOptions& GetOptions() { return options_; }
 
  protected:
-  // Reset the problem
-  void Reset();
+  void SetupProblem(const ViewGraph& view_graph,
+                    const std::unordered_map<rig_t, Rig>& rigs,
+                    const std::unordered_map<track_t, Track>& tracks);
 
   // Initialize all cameras to be random.
   void InitializeRandomPositions(const ViewGraph& view_graph,
+                                 std::unordered_map<frame_t, Frame>& frames,
                                  std::unordered_map<image_t, Image>& images,
                                  std::unordered_map<track_t, Track>& tracks);
 
@@ -75,40 +86,50 @@ class GlobalPositioner {
 
   // Add tracks to the problem
   void AddPointToCameraConstraints(
+      std::unordered_map<rig_t, Rig>& rigs,
       std::unordered_map<camera_t, Camera>& cameras,
+      std::unordered_map<frame_t, Frame>& frames,
       std::unordered_map<image_t, Image>& images,
       std::unordered_map<track_t, Track>& tracks);
 
   // Add a single track to the problem
-  void AddTrackToProblem(const track_t& track_id,
+  void AddTrackToProblem(track_t track_id,
+                         std::unordered_map<rig_t, Rig>& rigs,
                          std::unordered_map<camera_t, Camera>& cameras,
+                         std::unordered_map<frame_t, Frame>& frames,
                          std::unordered_map<image_t, Image>& images,
                          std::unordered_map<track_t, Track>& tracks);
 
   // Set the parameter groups
   void AddCamerasAndPointsToParameterGroups(
-      std::unordered_map<image_t, Image>& images,
+      std::unordered_map<rig_t, Rig>& rigs,
+      std::unordered_map<frame_t, Frame>& frames,
       std::unordered_map<track_t, Track>& tracks);
 
   // Parameterize the variables, set some variables to be constant if desired
-  void ParameterizeVariables(std::unordered_map<image_t, Image>& images,
+  void ParameterizeVariables(std::unordered_map<rig_t, Rig>& rigs,
+                             std::unordered_map<frame_t, Frame>& frames,
                              std::unordered_map<track_t, Track>& tracks);
 
   // During the optimization, the camera translation is set to be the camera
   // center Convert the results back to camera poses
-  void ConvertResults(std::unordered_map<image_t, Image>& images);
+  void ConvertResults(std::unordered_map<rig_t, Rig>& rigs,
+                      std::unordered_map<frame_t, Frame>& frames);
 
-  // Data members
   GlobalPositionerOptions options_;
 
   std::mt19937 random_generator_;
   std::unique_ptr<ceres::Problem> problem_;
 
-  // loss functions for reweighted terms
+  // Loss functions for reweighted terms.
+  std::shared_ptr<ceres::LossFunction> loss_function_;
   std::shared_ptr<ceres::LossFunction> loss_function_ptcam_uncalibrated_;
   std::shared_ptr<ceres::LossFunction> loss_function_ptcam_calibrated_;
 
-  std::unordered_map<track_t, double> scales_;
+  // Auxiliary scale variables.
+  std::vector<double> scales_;
+
+  std::unordered_map<rig_t, double> rig_scales_;
 };
 
 }  // namespace glomap

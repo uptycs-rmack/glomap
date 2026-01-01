@@ -1,5 +1,7 @@
 #include "glomap/processors/image_undistorter.h"
 
+#include <colmap/util/threading.h>
+
 namespace glomap {
 
 void UndistortImages(std::unordered_map<camera_t, Camera>& cameras,
@@ -7,39 +9,38 @@ void UndistortImages(std::unordered_map<camera_t, Camera>& cameras,
                      bool clean_points) {
   std::vector<image_t> image_ids;
   for (auto& [image_id, image] : images) {
-    int num_points = image.features.size();
-
+    const int num_points = image.features.size();
     if (image.features_undist.size() == num_points && !clean_points)
       continue;  // already undistorted
     image_ids.push_back(image_id);
   }
 
+  colmap::ThreadPool thread_pool(colmap::ThreadPool::kMaxNumThreads);
+
   LOG(INFO) << "Undistorting images..";
-#pragma omp parallel for
-  for (size_t i = 0; i < image_ids.size(); i++) {
-    Eigen::Vector2d pt_undist;
-    Eigen::Vector3d pt_undist_norm;
-
-    image_t image_id = image_ids[i];
-    Image& image = images[image_id];
-
-    int camera_id = image.camera_id;
-    Camera& camera = cameras[camera_id];
-    int num_points = image.features.size();
-
+  const int num_images = image_ids.size();
+  for (int image_idx = 0; image_idx < num_images; image_idx++) {
+    Image& image = images[image_ids[image_idx]];
+    const int num_points = image.features.size();
     if (image.features_undist.size() == num_points && !clean_points)
       continue;  // already undistorted
 
-    image.features_undist.clear();
-    image.features_undist.reserve(num_points);
-    for (int i = 0; i < num_points; i++) {
-      // Undistort point in image
-      pt_undist = camera.CamFromImg(image.features[i]);
+    const Camera& camera = cameras[image.camera_id];
 
-      pt_undist_norm = pt_undist.homogeneous().normalized();
-      image.features_undist.emplace_back(pt_undist_norm);
-    }
+    thread_pool.AddTask([&image, &camera, num_points]() {
+      image.features_undist.clear();
+      image.features_undist.reserve(num_points);
+      for (int i = 0; i < num_points; i++) {
+        image.features_undist.emplace_back(
+            camera.CamFromImg(image.features[i])
+                .value_or(Eigen::Vector2d::Zero())
+                .homogeneous()
+                .normalized());
+      }
+    });
   }
+
+  thread_pool.Wait();
   LOG(INFO) << "Image undistortion done";
 }
 

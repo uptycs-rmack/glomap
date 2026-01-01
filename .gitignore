@@ -1,12 +1,14 @@
-build
-data
+/build
+/data
 .pixi
 venv
 *.mp4
-.vscode
+/.vscode
 output
 shell.nix
 /run.sh
+/compile_commands.json
+.cache
 
 # pixi environments
 .pixi

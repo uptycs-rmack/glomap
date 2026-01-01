@@ -3,9 +3,11 @@
 #include "glomap/controllers/option_manager.h"
 #include "colmap/sensor/bitmap.h"
 #include "glomap/io/colmap_io.h"
+#include "glomap/io/pose_io.h"
 #include "glomap/io/recording.h"
 #include "glomap/types.h"
 
+#include <colmap/util/file.h>
 #include <colmap/util/misc.h>
 #include <colmap/util/timer.h>
 #include <rerun.hpp>
@@ -70,12 +72,19 @@ int RunMapper(int argc, char** argv) {
 
   // Load the database
   ViewGraph view_graph;
+  std::unordered_map<rig_t, Rig> rigs;
   std::unordered_map<camera_t, Camera> cameras;
+  std::unordered_map<frame_t, Frame> frames;
   std::unordered_map<image_t, Image> images;
   std::unordered_map<track_t, Track> tracks;
 
-  const colmap::Database database(database_path);
-  ConvertDatabaseToGlomap(database, view_graph, cameras, images);
+  auto database = colmap::Database::Open(database_path);
+  ConvertDatabaseToGlomap(*database, view_graph, rigs, cameras, frames, images);
+
+  if (view_graph.image_pairs.empty()) {
+    LOG(ERROR) << "Can't continue without image pairs";
+    return EXIT_FAILURE;
+  }
 
   log_images(rr_rec, images, image_path);
 
@@ -86,14 +95,21 @@ int RunMapper(int argc, char** argv) {
   colmap::Timer run_timer;
   run_timer.Start();
 
-  global_mapper.Solve(database, view_graph, cameras, images, tracks);
+  global_mapper.Solve(
+      *database, view_graph, rigs, cameras, frames, images, tracks);
   run_timer.Pause();
 
   LOG(INFO) << "Reconstruction done in " << run_timer.ElapsedSeconds()
             << " seconds";
 
-  WriteGlomapReconstruction(
-      output_path, cameras, images, tracks, output_format, image_path);
+  WriteGlomapReconstruction(output_path,
+                            rigs,
+                            cameras,
+                            frames,
+                            images,
+                            tracks,
+                            output_format,
+                            image_path);
   LOG(INFO) << "Export to COLMAP reconstruction done";
 
   return EXIT_SUCCESS;
@@ -129,10 +145,12 @@ int RunMapperResume(int argc, char** argv) {
   }
 
   // Load the reconstruction
-  ViewGraph view_graph;       // dummy variable
-  colmap::Database database;  // dummy variable
+  ViewGraph view_graph;                        // dummy variable
+  std::shared_ptr<colmap::Database> database;  // dummy variable
 
+  std::unordered_map<rig_t, Rig> rigs;
   std::unordered_map<camera_t, Camera> cameras;
+  std::unordered_map<frame_t, Frame> frames;
   std::unordered_map<image_t, Image> images;
   std::unordered_map<track_t, Track> tracks;
   colmap::Reconstruction reconstruction;
@@ -141,7 +159,7 @@ int RunMapperResume(int argc, char** argv) {
   image_path_global = image_path;
   
   reconstruction.Read(input_path);
-  ConvertColmapToGlomap(reconstruction, cameras, images, tracks);
+  ConvertColmapToGlomap(reconstruction, rigs, cameras, frames, images, tracks);
 
   log_images(rr_rec, images, image_path);
 
@@ -150,14 +168,21 @@ int RunMapperResume(int argc, char** argv) {
   // Main solver
   colmap::Timer run_timer;
   run_timer.Start();
-  global_mapper.Solve(database, view_graph, cameras, images, tracks);
+  global_mapper.Solve(
+      *database, view_graph, rigs, cameras, frames, images, tracks);
   run_timer.Pause();
 
   LOG(INFO) << "Reconstruction done in " << run_timer.ElapsedSeconds()
             << " seconds";
 
-  WriteGlomapReconstruction(
-      output_path, cameras, images, tracks, output_format, image_path);
+  WriteGlomapReconstruction(output_path,
+                            rigs,
+                            cameras,
+                            frames,
+                            images,
+                            tracks,
+                            output_format,
+                            image_path);
   LOG(INFO) << "Export to COLMAP reconstruction done";
 
   return EXIT_SUCCESS;

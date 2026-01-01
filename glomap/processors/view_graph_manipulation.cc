@@ -1,24 +1,28 @@
 #include "view_graph_manipulation.h"
 
 #include "glomap/math/two_view_geometry.h"
-#include "glomap/math/union_find.h"
+
+#include <colmap/math/union_find.h>
+#include <colmap/util/threading.h>
 
 namespace glomap {
+
 image_pair_t ViewGraphManipulater::SparsifyGraph(
     ViewGraph& view_graph,
+    std::unordered_map<frame_t, Frame>& frames,
     std::unordered_map<image_t, Image>& images,
     int expected_degree) {
-  image_t num_img = view_graph.KeepLargestConnectedComponents(images);
+  image_t num_img = view_graph.KeepLargestConnectedComponents(frames, images);
 
   // Keep track of chosen edges
   std::unordered_set<image_pair_t> chosen_edges;
   const std::unordered_map<image_t, std::unordered_set<image_t>>&
-      adjacency_list = view_graph.GetAdjacencyList();
+      adjacency_list = view_graph.CreateImageAdjacencyList();
 
   // Here, the average is the mean of the degrees
   double average_degree = 0;
   for (const auto& [image_id, neighbors] : adjacency_list) {
-    if (images[image_id].is_registered == false) continue;
+    if (images[image_id].IsRegistered() == false) continue;
     average_degree += neighbors.size();
   }
   average_degree = average_degree / num_img;
@@ -31,8 +35,8 @@ image_pair_t ViewGraphManipulater::SparsifyGraph(
     image_t image_id1 = image_pair.image_id1;
     image_t image_id2 = image_pair.image_id2;
 
-    if (images[image_id1].is_registered == false ||
-        images[image_id2].is_registered == false)
+    if (images[image_id1].IsRegistered() == false ||
+        images[image_id2].IsRegistered() == false)
       continue;
 
     int degree1 = adjacency_list.at(image_id1).size();
@@ -43,6 +47,7 @@ image_pair_t ViewGraphManipulater::SparsifyGraph(
       continue;
     }
 
+    // TODO: Replace rand() with thread-safe random number generator.
     if (rand() / double(RAND_MAX) <
         (expected_degree * average_degree) / (degree1 * degree2)) {
       chosen_edges.insert(pair_id);
@@ -57,21 +62,24 @@ image_pair_t ViewGraphManipulater::SparsifyGraph(
   }
 
   // Keep the largest connected component
-  view_graph.KeepLargestConnectedComponents(images);
+  view_graph.KeepLargestConnectedComponents(frames, images);
 
   return chosen_edges.size();
 }
 
 image_t ViewGraphManipulater::EstablishStrongClusters(
     ViewGraph& view_graph,
+    std::unordered_map<frame_t, Frame>& frames,
     std::unordered_map<image_t, Image>& images,
     StrongClusterCriteria criteria,
     double min_thres,
     int min_num_images) {
-  image_t num_img_before = view_graph.KeepLargestConnectedComponents(images);
+  image_t num_img_before =
+      view_graph.KeepLargestConnectedComponents(frames, images);
 
   // Construct the initial cluster by keeping the pairs with weight > min_thres
-  UnionFind<image_pair_t> uf;
+  colmap::UnionFind<image_pair_t> uf;
+  uf.Reserve(frames.size());
   // Go through the edges, and add the edge with weight > min_thres
   for (auto& [pair_id, image_pair] : view_graph.image_pairs) {
     if (image_pair.is_valid == false) continue;
@@ -81,8 +89,8 @@ image_t ViewGraphManipulater::EstablishStrongClusters(
              (criteria == INLIER_NUM && image_pair.inliers.size() > min_thres);
     status = status || (criteria == WEIGHT && image_pair.weight > min_thres);
     if (status) {
-      uf.Union(image_pair_t(image_pair.image_id1),
-               image_pair_t(image_pair.image_id2));
+      uf.Union(image_pair_t(images[image_pair.image_id1].frame_id),
+               image_pair_t(images[image_pair.image_id2].frame_id));
     }
   }
 
@@ -115,8 +123,8 @@ image_t ViewGraphManipulater::EstablishStrongClusters(
       image_t image_id1 = image_pair.image_id1;
       image_t image_id2 = image_pair.image_id2;
 
-      image_pair_t root1 = uf.Find(image_pair_t(image_id1));
-      image_pair_t root2 = uf.Find(image_pair_t(image_id2));
+      image_pair_t root1 = uf.Find(image_pair_t(images[image_id1].frame_id));
+      image_pair_t root2 = uf.Find(image_pair_t(images[image_id2].frame_id));
 
       if (root1 == root2) {
         continue;
@@ -151,11 +159,14 @@ image_t ViewGraphManipulater::EstablishStrongClusters(
     image_t image_id1 = image_pair.image_id1;
     image_t image_id2 = image_pair.image_id2;
 
-    if (uf.Find(image_pair_t(image_id1)) != uf.Find(image_pair_t(image_id2))) {
+    frame_t frame_id1 = images[image_id1].frame_id;
+    frame_t frame_id2 = images[image_id2].frame_id;
+
+    if (uf.Find(image_pair_t(frame_id1)) != uf.Find(image_pair_t(frame_id2))) {
       image_pair.is_valid = false;
     }
   }
-  int num_comp = view_graph.MarkConnectedComponents(images);
+  int num_comp = view_graph.MarkConnectedComponents(frames, images);
 
   LOG(INFO) << "Clustering take " << iteration << " iterations. "
             << "Images are grouped into " << num_comp
@@ -198,9 +209,7 @@ void ViewGraphManipulater::UpdateImagePairsConfig(
   // pairs are valid, then set the camera to valid
   std::unordered_map<camera_t, bool> camera_validity;
   for (auto& [camera_id, counter] : camera_counter) {
-    if (counter.first == 0) {
-      camera_validity[camera_id] = false;
-    } else if (counter.second * 1. / counter.first > 0.5) {
+    if (counter.second * 1. / counter.first > 0.5) {
       camera_validity[camera_id] = true;
     } else {
       camera_validity[camera_id] = false;
@@ -241,49 +250,55 @@ void ViewGraphManipulater::DecomposeRelPose(
       continue;
     image_pair_ids.push_back(pair_id);
   }
-  LOG(INFO) << "Decompose relative pose for " << image_pair_ids.size()
-            << " pairs";
 
-#pragma omp parallel for
-  for (size_t idx = 0; idx < image_pair_ids.size(); idx++) {
-    ImagePair& image_pair = view_graph.image_pairs.at(image_pair_ids[idx]);
-    image_t image_id1 = image_pair.image_id1;
-    image_t image_id2 = image_pair.image_id2;
+  const int64_t num_image_pairs = image_pair_ids.size();
+  LOG(INFO) << "Decompose relative pose for " << num_image_pairs << " pairs";
 
-    camera_t camera_id1 = images.at(image_id1).camera_id;
-    camera_t camera_id2 = images.at(image_id2).camera_id;
+  colmap::ThreadPool thread_pool(colmap::ThreadPool::kMaxNumThreads);
+  for (int64_t idx = 0; idx < num_image_pairs; idx++) {
+    thread_pool.AddTask([&, idx]() {
+      ImagePair& image_pair = view_graph.image_pairs.at(image_pair_ids[idx]);
+      image_t image_id1 = image_pair.image_id1;
+      image_t image_id2 = image_pair.image_id2;
 
-    // Use the two-view geometry to re-estimate the relative pose
-    colmap::TwoViewGeometry two_view_geometry;
-    two_view_geometry.E = image_pair.E;
-    two_view_geometry.F = image_pair.F;
-    two_view_geometry.H = image_pair.H;
-    two_view_geometry.config = image_pair.config;
+      camera_t camera_id1 = images.at(image_id1).camera_id;
+      camera_t camera_id2 = images.at(image_id2).camera_id;
 
-    colmap::EstimateTwoViewGeometryPose(cameras[camera_id1],
-                                        images[image_id1].features,
-                                        cameras[camera_id2],
-                                        images[image_id2].features,
-                                        &two_view_geometry);
+      // Use the two-view geometry to re-estimate the relative pose
+      colmap::TwoViewGeometry two_view_geometry;
+      two_view_geometry.E = image_pair.E;
+      two_view_geometry.F = image_pair.F;
+      two_view_geometry.H = image_pair.H;
+      two_view_geometry.config = image_pair.config;
 
-    // if it planar, then use the estimated relative pose
-    if (image_pair.config == colmap::TwoViewGeometry::PLANAR &&
-        cameras[camera_id1].has_prior_focal_length &&
-        cameras[camera_id2].has_prior_focal_length) {
-      image_pair.config = colmap::TwoViewGeometry::CALIBRATED;
-      continue;
-    } else if (!(cameras[camera_id1].has_prior_focal_length &&
-                 cameras[camera_id2].has_prior_focal_length))
-      continue;
+      colmap::EstimateTwoViewGeometryPose(cameras[camera_id1],
+                                          images[image_id1].features,
+                                          cameras[camera_id2],
+                                          images[image_id2].features,
+                                          &two_view_geometry);
 
-    image_pair.config = two_view_geometry.config;
-    image_pair.cam2_from_cam1 = two_view_geometry.cam2_from_cam1;
+      // if it planar, then use the estimated relative pose
+      if (image_pair.config == colmap::TwoViewGeometry::PLANAR &&
+          cameras[camera_id1].has_prior_focal_length &&
+          cameras[camera_id2].has_prior_focal_length) {
+        image_pair.config = colmap::TwoViewGeometry::CALIBRATED;
+        return;
+      } else if (!(cameras[camera_id1].has_prior_focal_length &&
+                   cameras[camera_id2].has_prior_focal_length))
+        return;
 
-    if (image_pair.cam2_from_cam1.translation.norm() > EPS) {
-      image_pair.cam2_from_cam1.translation =
-          image_pair.cam2_from_cam1.translation.normalized();
-    }
+      image_pair.config = two_view_geometry.config;
+      image_pair.cam2_from_cam1 = two_view_geometry.cam2_from_cam1;
+
+      if (image_pair.cam2_from_cam1.translation.norm() > EPS) {
+        image_pair.cam2_from_cam1.translation =
+            image_pair.cam2_from_cam1.translation.normalized();
+      }
+    });
   }
+
+  thread_pool.Wait();
+
   size_t counter = 0;
   for (size_t idx = 0; idx < image_pair_ids.size(); idx++) {
     ImagePair& image_pair = view_graph.image_pairs.at(image_pair_ids[idx]);

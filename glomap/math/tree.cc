@@ -84,9 +84,19 @@ image_t MaximumSpanningTree(const ViewGraph& view_graph,
   std::unordered_map<int, image_t> idx_to_image_id;
   idx_to_image_id.reserve(images.size());
   for (auto& [image_id, image] : images) {
-    if (image.is_registered == false) continue;
+    if (image.IsRegistered() == false) continue;
     idx_to_image_id[image_id_to_idx.size()] = image_id;
     image_id_to_idx[image_id] = image_id_to_idx.size();
+  }
+
+  double max_weight = 0;
+  for (const auto& [pair_id, image_pair] : view_graph.image_pairs) {
+    if (image_pair.is_valid == false) continue;
+    if (type == INLIER_RATIO)
+      max_weight = std::max(max_weight, image_pair.weight);
+    else
+      max_weight =
+          std::max(max_weight, static_cast<double>(image_pair.inliers.size()));
   }
 
   // establish graph
@@ -100,7 +110,7 @@ image_t MaximumSpanningTree(const ViewGraph& view_graph,
     const Image& image1 = images.at(image_pair.image_id1);
     const Image& image2 = images.at(image_pair.image_id2);
 
-    if (image1.is_registered == false || image2.is_registered == false) {
+    if (image1.IsRegistered() == false || image2.IsRegistered() == false) {
       continue;
     }
 
@@ -111,11 +121,11 @@ image_t MaximumSpanningTree(const ViewGraph& view_graph,
     // spanning tree
     e = boost::add_edge(idx1, idx2, G).first;
     if (type == INLIER_NUM)
-      weights_boost[e] = -image_pair.inliers.size();
+      weights_boost[e] = max_weight - image_pair.inliers.size();
     else if (type == INLIER_RATIO)
-      weights_boost[e] = -image_pair.weight;
+      weights_boost[e] = max_weight - image_pair.weight;
     else
-      weights_boost[e] = -image_pair.inliers.size();
+      weights_boost[e] = max_weight - image_pair.inliers.size();
   }
 
   std::vector<edge_desc>

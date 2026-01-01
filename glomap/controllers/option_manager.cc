@@ -1,6 +1,7 @@
 #include "option_manager.h"
 
 #include "glomap/controllers/global_mapper.h"
+#include "glomap/estimators/gravity_refinement.h"
 
 #include <boost/filesystem/operations.hpp>
 #include <boost/property_tree/ini_parser.hpp>
@@ -14,9 +15,13 @@ OptionManager::OptionManager(bool add_project_options) {
   image_path = std::make_shared<std::string>();
 
   mapper = std::make_shared<GlobalMapperOptions>();
+  gravity_refiner = std::make_shared<GravityRefinerOptions>();
   Reset();
 
   desc_->add_options()("help,h", "");
+
+  AddAndRegisterDefaultOption("log_to_stderr", &FLAGS_logtostderr);
+  AddAndRegisterDefaultOption("log_level", &FLAGS_v);
 }
 
 void OptionManager::AddAllOptions() {
@@ -177,6 +182,10 @@ void OptionManager::AddGlobalPositionerOptions() {
     return;
   }
   added_global_positioning_options_ = true;
+  AddAndRegisterDefaultOption("GlobalPositioning.use_gpu",
+                              &mapper->opt_gp.use_gpu);
+  AddAndRegisterDefaultOption("GlobalPositioning.gpu_index",
+                              &mapper->opt_gp.gpu_index);
   AddAndRegisterDefaultOption("GlobalPositioning.optimize_positions",
                               &mapper->opt_gp.optimize_positions);
   AddAndRegisterDefaultOption("GlobalPositioning.optimize_points",
@@ -196,12 +205,20 @@ void OptionManager::AddBundleAdjusterOptions() {
     return;
   }
   added_bundle_adjustment_options_ = true;
+  AddAndRegisterDefaultOption("BundleAdjustment.use_gpu",
+                              &mapper->opt_ba.use_gpu);
+  AddAndRegisterDefaultOption("BundleAdjustment.gpu_index",
+                              &mapper->opt_ba.gpu_index);
+  AddAndRegisterDefaultOption("BundleAdjustment.optimize_rig_poses",
+                              &mapper->opt_ba.optimize_rig_poses);
   AddAndRegisterDefaultOption("BundleAdjustment.optimize_rotations",
                               &mapper->opt_ba.optimize_rotations);
   AddAndRegisterDefaultOption("BundleAdjustment.optimize_translation",
                               &mapper->opt_ba.optimize_translation);
   AddAndRegisterDefaultOption("BundleAdjustment.optimize_intrinsics",
                               &mapper->opt_ba.optimize_intrinsics);
+  AddAndRegisterDefaultOption("BundleAdjustment.optimize_principal_point",
+                              &mapper->opt_ba.optimize_principal_point);
   AddAndRegisterDefaultOption("BundleAdjustment.optimize_points",
                               &mapper->opt_ba.optimize_points);
   AddAndRegisterDefaultOption("BundleAdjustment.thres_loss_function",
@@ -231,6 +248,14 @@ void OptionManager::AddInlierThresholdOptions() {
     return;
   }
   added_inliers_options_ = true;
+  AddAndRegisterDefaultOption("Thresholds.max_angle_error",
+                              &mapper->inlier_thresholds.max_angle_error);
+  AddAndRegisterDefaultOption(
+      "Thresholds.max_reprojection_error",
+      &mapper->inlier_thresholds.max_reprojection_error);
+  AddAndRegisterDefaultOption(
+      "Thresholds.min_triangulation_angle",
+      &mapper->inlier_thresholds.min_triangulation_angle);
   AddAndRegisterDefaultOption("Thresholds.max_epipolar_error_E",
                               &mapper->inlier_thresholds.max_epipolar_error_E);
   AddAndRegisterDefaultOption("Thresholds.max_epipolar_error_F",
@@ -245,6 +270,18 @@ void OptionManager::AddInlierThresholdOptions() {
                               &mapper->inlier_thresholds.max_rotation_error);
 }
 
+void OptionManager::AddGravityRefinerOptions() {
+  if (added_gravity_refiner_options_) {
+    return;
+  }
+  added_gravity_refiner_options_ = true;
+  AddAndRegisterDefaultOption("GravityRefiner.max_outlier_ratio",
+                              &gravity_refiner->max_outlier_ratio);
+  AddAndRegisterDefaultOption("GravityRefiner.max_gravity_error",
+                              &gravity_refiner->max_gravity_error);
+  AddAndRegisterDefaultOption("GravityRefiner.min_num_neighbors",
+                              &gravity_refiner->min_num_neighbors);
+}
 void OptionManager::Reset() {
   const bool kResetPaths = true;
   ResetOptions(kResetPaths);
@@ -273,6 +310,7 @@ void OptionManager::ResetOptions(const bool reset_paths) {
     *image_path = "";
   }
   *mapper = GlobalMapperOptions();
+  *gravity_refiner = GravityRefinerOptions();
 }
 
 void OptionManager::Parse(const int argc, char** argv) {
