@@ -34,10 +34,12 @@ void WriteGlomapReconstruction(
     }
 
     // Convert back to GLOMAP so that we can log the reconstruction with color.
+    std::unordered_map<rig_t, Rig> rigs_copy;
     std::unordered_map<camera_t, Camera> cameras_copy;
+    std::unordered_map<frame_t, Frame> frames_copy;
     std::unordered_map<image_t, Image> images_copy;
     std::unordered_map<track_t, Track> tracks_copy;
-    ConvertColmapToGlomap(reconstruction, cameras_copy, images_copy, tracks_copy);
+    ConvertColmapToGlomap(reconstruction, rigs_copy, cameras_copy, frames_copy, images_copy, tracks_copy);
     rr_rec.set_time_sequence("step", algorithm_step++);
     rr_rec.log("status", rerun::TextLog("Converted to Colmap and extracted colors"));
     log_reconstruction(rr_rec, cameras_copy, images_copy, tracks_copy);

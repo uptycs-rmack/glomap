@@ -1,9 +1,11 @@
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
+include(FetchContent)
+
 message(STATUS "Configuring Rerun...")
 if (FETCH_RERUN)
   FetchContent_Declare(rerun_sdk URL
-      https://github.com/rerun-io/rerun/releases/download/0.17.0/rerun_cpp_sdk.zip)
+      https://github.com/rerun-io/rerun/releases/download/0.28.1/rerun_cpp_sdk.zip)
   FetchContent_MakeAvailable(rerun_sdk)
 else()
     find_package(rerun_sdk REQUIRED)

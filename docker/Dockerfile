@@ -1,4 +1,4 @@
-FROM ubuntu:24.10
+FROM ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends --no-install-suggests \
         curl \
@@ -34,7 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends --no-install-su
 
 WORKDIR /ws/
 
-RUN pipx install rerun-sdk==0.17.0
+RUN pipx install rerun-sdk==0.28.1
 ENV PATH=$PATH:/root/.local/share/pipx/venvs/rerun-sdk/bin/
 
 # RUN ./install_colmap.sh

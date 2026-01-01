@@ -26,41 +26,46 @@ Eigen::Vector3d RandVector3d(std::mt19937& random_generator,
 
 
 class LoggingCallback : public ceres::IterationCallback {
-public: 
-  std::unordered_map<track_t, Track>& tracks;
+public:
+  std::unordered_map<rig_t, Rig>& rigs;
   std::unordered_map<camera_t, Camera>& cameras;
+  std::unordered_map<frame_t, Frame>& frames;
   std::unordered_map<image_t, Image>& images;
+  std::unordered_map<track_t, Track>& tracks;
   std::string image_path;
 
-  LoggingCallback(std::unordered_map<track_t, Track>& tracks, 
+  LoggingCallback(std::unordered_map<rig_t, Rig>& rigs,
                   std::unordered_map<camera_t, Camera>& cameras,
-                  std::unordered_map<camera_t, Image>& images,
+                  std::unordered_map<frame_t, Frame>& frames,
+                  std::unordered_map<image_t, Image>& images,
+                  std::unordered_map<track_t, Track>& tracks,
                   std::string image_path
-  ) : tracks {tracks}, cameras {cameras}, images {images}, image_path {image_path} {}
+  ) : rigs{rigs}, cameras{cameras}, frames{frames}, images{images}, tracks{tracks}, image_path{image_path} {}
   ~LoggingCallback() {}
 
   ceres::CallbackReturnType operator()(const ceres::IterationSummary& summary) {
     
     std::unordered_map<camera_t, Image> images_copy = images;
     for (auto& [image_id, image] : images_copy) {
-      image.cam_from_world.translation =
-          -(image.cam_from_world.rotation * image.cam_from_world.translation);
+      if (!image.IsRegistered()) continue;
+      image.CamFromWorld().translation =
+          -(image.CamFromWorld().rotation * image.CamFromWorld().translation);
     }
 
     rr_rec.set_time_sequence("step", algorithm_step++);
 
     if (summary.iteration == 0) {
       // This is a bit of a hack to extract the colors for the point cloud to make the visualization a bit prettier.
-      
+      std::unordered_map<rig_t, Rig> tmp_rigs;
       std::unordered_map<camera_t, Camera> tmp_cameras;
+      std::unordered_map<frame_t, Frame> tmp_frames;
       std::unordered_map<image_t, Image> tmp_images;
       std::unordered_map<track_t, Track> tmp_tracks;
 
       colmap::Reconstruction reconstruction;
-      // ConvertDatabaseToColmap(re)
-      ConvertGlomapToColmap(cameras, images_copy, tracks, reconstruction);
+      ConvertGlomapToColmap(rigs, cameras, frames, images_copy, tracks, reconstruction);
       reconstruction.ExtractColorsForAllImages(image_path);
-      ConvertColmapToGlomap(reconstruction, tmp_cameras, tmp_images, tmp_tracks);
+      ConvertColmapToGlomap(reconstruction, tmp_rigs, tmp_cameras, tmp_frames, tmp_images, tmp_tracks);
       for (auto &[track_id, track] : tmp_tracks) {
         tracks[track_id].color = track.color;
       }
@@ -132,7 +137,7 @@ bool GlobalPositioner::Solve(const ViewGraph& view_graph,
   ParameterizeVariables(rigs, frames, tracks);
 
   LOG(INFO) << "Solving the global positioner problem";
-  LoggingCallback callback {tracks, cameras, images, image_path_global};
+  LoggingCallback callback {rigs, cameras, frames, images, tracks, image_path_global};
 
   ceres::Solver::Summary summary;
   options_.solver_options.minimizer_progress_to_stdout = VLOG_IS_ON(2);

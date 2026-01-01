@@ -1,6 +1,6 @@
 #include "recording.h"
 #include <colmap/util/misc.h>
-// #include <colmap/
+#include <filesystem>
 
 namespace glomap {
 
@@ -17,7 +17,6 @@ void log_bitmap(rerun::RecordingStream &rec, std::string_view entity_path,  colm
   size_t width = bitmap.Width();
   size_t height = bitmap.Height();
   size_t nchannels = bitmap.Channels();
-  std::vector<size_t> shape = {height, width, nchannels};
   auto buffer = bitmap.ConvertToRowMajorArray();
   LOG(INFO) << buffer.size();
   LOG(INFO) << entity_path;
@@ -25,8 +24,12 @@ void log_bitmap(rerun::RecordingStream &rec, std::string_view entity_path,  colm
     for (size_t i = 0; i < buffer.size(); i+=3) {
       std::swap(buffer[i], buffer[i+2]);
     }
+    rec.log(entity_path, rerun::Image::from_rgb24(buffer, {width, height}));
+  } else if (nchannels == 4) {
+    rec.log(entity_path, rerun::Image::from_rgba32(buffer, {width, height}));
+  } else if (nchannels == 1) {
+    rec.log(entity_path, rerun::Image::from_grayscale8(buffer, {width, height}));
   }
-  rec.log(entity_path, rerun::Image(shape, std::move(buffer)));
 }
 
 std::unordered_map<image_t, std::vector<track_t>> get_observation_to_point_map(
@@ -38,7 +41,7 @@ std::unordered_map<image_t, std::vector<track_t>> get_observation_to_point_map(
   if (tracks.size()) {
     // Initialize every point to corresponds to invalid point
     for (auto& [image_id, image] : images) {
-      if (!image.is_registered)
+      if (!image.IsRegistered())
         continue;
       image_to_point3D[image_id] =
           std::vector<track_t>(image.features.size(), -1);
@@ -68,23 +71,22 @@ void log_reconstruction(
   std::vector<rerun::Position3D> points;
   std::vector<rerun::Color> colors;
 
-  
+
   for (auto &[_, image] : images) {
+    if (!image.IsRegistered()) continue;  // Skip images without valid poses
+
     auto camera = cameras.at(image.camera_id);
-    Eigen::Vector3f translation = image.cam_from_world.translation.cast<float>();
-    Eigen::Matrix3f rotation = image.cam_from_world.rotation.toRotationMatrix().cast<float>();
-    rec.log("images/" + image.file_name, rerun::Transform3D(
-      rerun::datatypes::TranslationAndMat3x3(
-          rerun::Vec3D(translation.data()),
-          rerun::Mat3x3(rotation.data()),
-          true
-      )
-    ));
+    Eigen::Vector3f translation = image.CamFromWorld().translation.cast<float>();
+    Eigen::Matrix3f rotation = image.CamFromWorld().rotation.toRotationMatrix().cast<float>();
+    rec.log("images/" + image.file_name, rerun::Transform3D()
+      .with_translation(rerun::Vec3D(translation.data()))
+      .with_mat3x3(rerun::Mat3x3(rotation.data()))
+    );
     rec.log_static("images/" + image.file_name, rerun::ViewCoordinates::RDF);
     Eigen::Matrix3Xf K = camera.GetK().cast<float>();
 
     rec.log(
-      "images/" + image.file_name, 
+      "images/" + image.file_name,
       rerun::Pinhole(rerun::components::PinholeProjection(rerun::datatypes::Mat3x3(K.data())))
         .with_resolution(int(camera.width), int(camera.height))
     );
@@ -94,7 +96,7 @@ void log_reconstruction(
 
     // Should actually be `track.observations.size() < options_.min_num_view_per_track`.
     if (track.observations.size() < 3) continue;
-    
+
     auto xyz = track.xyz;
     points.emplace_back(xyz.x(), xyz.y(), xyz.z());
     colors.emplace_back(track.color[0], track.color[1], track.color[2]);
@@ -105,9 +107,9 @@ void log_reconstruction(
 
 void log_images(rerun::RecordingStream &rec, const std::unordered_map<camera_t, Image>& images, const std::string image_path) {
   for (auto &[id, image] : images) {
-    std::string path = colmap::JoinPaths(image_path, image.file_name);
+    std::filesystem::path full_path = std::filesystem::path(image_path) / image.file_name;
     colmap::Bitmap bitmap;
-    if (!bitmap.Read(path)) {
+    if (!bitmap.Read(full_path.string())) {
       LOG(ERROR) << "Failed to read image path";
     }
     std::string entity_path = "images/";
