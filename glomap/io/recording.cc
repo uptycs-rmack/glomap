@@ -1,6 +1,7 @@
 #include "recording.h"
 #include <colmap/util/misc.h>
 #include <filesystem>
+#include <cstdlib>
 
 namespace glomap {
 
@@ -9,13 +10,24 @@ uint32_t algorithm_step = 0;
 std::string image_path_global = "";
 
 void init_recording() {
-  rr_rec.spawn().exit_on_failure();
+  // Check for RERUN_CONNECT environment variable to connect to remote viewer
+  // Format: "host:port" (e.g., "host.docker.internal:9876" or "192.168.1.100:9876")
+  // Default rerun port is 9876
+  const char* rerun_connect = std::getenv("RERUN_CONNECT");
+
+  if (rerun_connect != nullptr && std::strlen(rerun_connect) > 0) {
+    LOG(INFO) << "Connecting to remote Rerun viewer at: " << rerun_connect;
+    rr_rec.connect_grpc(rerun_connect).exit_on_failure();
+  } else {
+    // Spawn local viewer
+    rr_rec.spawn().exit_on_failure();
+  }
   rr_rec.set_time_sequence("step", algorithm_step);
 }
 
 void log_bitmap(rerun::RecordingStream &rec, std::string_view entity_path,  colmap::Bitmap& bitmap) {
-  size_t width = bitmap.Width();
-  size_t height = bitmap.Height();
+  uint32_t width = static_cast<uint32_t>(bitmap.Width());
+  uint32_t height = static_cast<uint32_t>(bitmap.Height());
   size_t nchannels = bitmap.Channels();
   auto buffer = bitmap.ConvertToRowMajorArray();
   LOG(INFO) << buffer.size();
