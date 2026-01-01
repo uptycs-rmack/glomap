@@ -4,31 +4,31 @@ from __future__ import annotations
 
 import argparse
 import cv2
-import numpy as np
 from pathlib import Path
 
-def extract_frames(cap, desired_fps: float | None) -> list[np.ndarray]:
+
+def extract_frames(video_path: Path, output_dir: Path, desired_fps: float | None):
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if desired_fps:
-        fps_ratio = desired_fps/fps
-    else:
-        fps_ratio = 1.0
-    frames = []
+    fps_ratio = (desired_fps / fps) if desired_fps else 1.0
+    
     portion = 0.0
+    frame_num = 0
+    
     while True:
-        ret, rgb_image = cap.read()
+        ret, frame = cap.read()
         if not ret:
             break
         portion += fps_ratio
         if portion >= 1.0:
             portion -= 1.0
-            frames.append(rgb_image)
-    return frames
-
-def save_frames(frames: list[np.ndarray], output_dir: Path):
-    output_dir.mkdir(parents=True, exist_ok=True)
-    for i, frame in enumerate(frames):
-        cv2.imwrite(str(output_dir / f"{i:0>5}.jpg"), frame)
+            cv2.imwrite(str(output_dir / f"{frame_num:05d}.jpg"), frame)
+            frame_num += 1
+    
+    cap.release()
+    print(f"Extracted {frame_num} frames")
 
 
 def main():
@@ -37,8 +37,8 @@ def main():
     parser.add_argument("-v", "--video-path", type=Path, required=True)
     parser.add_argument("--desired-fps", type=float, default=60.0)
     args = parser.parse_args()
-    frames = extract_frames(cv2.VideoCapture(str(args.video_path)), args.desired_fps)
-    save_frames(frames, args.output_dir)
+    extract_frames(args.video_path, args.output_dir, args.desired_fps)
+
 
 if __name__ == "__main__":
     main()
